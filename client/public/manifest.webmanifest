@@ -1,0 +1,14 @@
+{
+  "id": "/",
+  "name": "Sʀꜱɪɴ ᴡᴇʙ",
+  "short_name": "Sʀꜱɪɴ ᴡᴇʙ",
+  "description": "A calm, Myanmar-friendly home for serialized fiction.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

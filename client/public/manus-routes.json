@@ -1,0 +1,1 @@
+{"routes":[{"path":"/","title":"Sʀꜱɪɴ ᴡᴇʙ"},{"path":"/login","title":"Sʀꜱɪɴ ᴡᴇʙ"},{"path":"/novel/:id","title":"Sʀꜱɪɴ ᴡᴇʙ"},{"path":"/read/:novelId/:chapterId","title":"Sʀꜱɪɴ ᴡᴇʙ"},{"path":"/admin","title":"Sʀꜱɪɴ ᴡᴇʙ"},{"path":"/404","title":"Sʀꜱɪɴ ᴡᴇʙ"}]}
