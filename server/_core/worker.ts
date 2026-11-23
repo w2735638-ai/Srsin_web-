@@ -50,6 +50,56 @@ function createMiniExpressApp() {
 const miniApp = createMiniExpressApp();
 registerOAuthRoutes(miniApp as any);
 
+function createMockRes(extraHeaders: Headers) {
+  const res: any = {
+    statusCode: 200,
+    status(code: number) {
+      res.statusCode = code;
+      return res;
+    },
+    setHeader(name: string, val: string | string[]) {
+      if (Array.isArray(val)) {
+        extraHeaders.delete(name);
+        for (const item of val) extraHeaders.append(name, item);
+      } else {
+        extraHeaders.set(name, String(val));
+      }
+      return res;
+    },
+    getHeader(name: string) {
+      return extraHeaders.get(name) ?? undefined;
+    },
+    removeHeader(name: string) {
+      extraHeaders.delete(name);
+      return res;
+    },
+    set(field: string | Record<string, string>, val?: string) {
+      if (typeof field === "string" && val !== undefined) {
+        res.setHeader(field, val);
+      } else if (typeof field === "object") {
+        for (const [k, v] of Object.entries(field)) res.setHeader(k, v);
+      }
+      return res;
+    },
+    cookie(name: string, value: string, options?: Record<string, any>) {
+      const parts = [`${name}=${encodeURIComponent(value)}`];
+      if (options?.maxAge) parts.push(`Max-Age=${Math.floor(options.maxAge / 1000)}`);
+      if (options?.httpOnly) parts.push("HttpOnly");
+      if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`);
+      if (options?.path) parts.push(`Path=${options.path}`);
+      if (options?.secure) parts.push("Secure");
+      extraHeaders.append("set-cookie", parts.join("; "));
+      return res;
+    },
+    clearCookie(name: string, options?: Record<string, any>) {
+      const path = options?.path || "/";
+      extraHeaders.append("set-cookie", `${name}=; Max-Age=0; Path=${path}`);
+      return res;
+    },
+  };
+  return res;
+}
+
 async function runMatchedRoutes(request: Request, url: URL): Promise<Response | null> {
   const method = request.method.toUpperCase();
   const matched = miniApp.routes.filter((r) => {
@@ -110,48 +160,14 @@ async function runMatchedRoutes(request: Request, url: URL): Promise<Response | 
     };
 
     const res: any = {
-      statusCode: 200,
+      ...createMockRes(outHeaders),
       status(code: number) {
         statusCode = code;
         this.statusCode = code;
         return this;
       },
-      setHeader(name: string, val: string | string[]) {
-        if (Array.isArray(val)) {
-          outHeaders.delete(name);
-          for (const item of val) outHeaders.append(name, item);
-        } else {
-          outHeaders.set(name, String(val));
-        }
-        return this;
-      },
-      getHeader(name: string) {
-        return outHeaders.get(name) ?? undefined;
-      },
-      set(field: string | Record<string, string>, val?: string) {
-        if (typeof field === "string" && val !== undefined) {
-          this.setHeader(field, val);
-        } else if (typeof field === "object") {
-          for (const [k, v] of Object.entries(field)) this.setHeader(k, v);
-        }
-        return this;
-      },
       type(t: string) {
         this.setHeader("content-type", t);
-        return this;
-      },
-      cookie(name: string, value: string, options?: Record<string, any>) {
-        const parts = [`${name}=${encodeURIComponent(value)}`];
-        if (options?.maxAge) parts.push(`Max-Age=${Math.floor(options.maxAge / 1000)}`);
-        if (options?.httpOnly) parts.push("HttpOnly");
-        if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`);
-        if (options?.path) parts.push(`Path=${options.path}`);
-        outHeaders.append("set-cookie", parts.join("; "));
-        return this;
-      },
-      clearCookie(name: string, options?: Record<string, any>) {
-        const path = options?.path || "/";
-        outHeaders.append("set-cookie", `${name}=; Max-Age=0; Path=${path}`);
         return this;
       },
       redirect(statusOrUrl: number | string, maybeUrl?: string) {
@@ -265,13 +281,34 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/trpc")) {
-      return await fetchRequestHandler({
+      const extraHeaders = new Headers();
+      const mockRes = createMockRes(extraHeaders);
+      const trpcResponse = await fetchRequestHandler({
         endpoint: "/api/trpc",
         req: request,
         router: appRouter,
         createContext: async ({ req: trpcReq }) => {
-          return await createContext({ req: trpcReq as any, res: {} as any, info: {} as any } as any);
+          return await createContext({
+            req: trpcReq as any,
+            res: mockRes as any,
+            info: {} as any,
+          } as any);
         },
+      });
+
+      const combinedHeaders = new Headers(trpcResponse.headers);
+      extraHeaders.forEach((value, key) => {
+        if (key.toLowerCase() === "set-cookie") {
+          combinedHeaders.append(key, value);
+        } else {
+          combinedHeaders.set(key, value);
+        }
+      });
+
+      return new Response(trpcResponse.body, {
+        status: trpcResponse.status,
+        statusText: trpcResponse.statusText,
+        headers: combinedHeaders,
       });
     }
 
@@ -283,4 +320,4 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
-        
+                                            
