@@ -50,6 +50,31 @@ function createMiniExpressApp() {
 const miniApp = createMiniExpressApp();
 registerOAuthRoutes(miniApp as any);
 
+function getClientIp(request: Request): string {
+  return (
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "127.0.0.1"
+  );
+}
+
+function attachSocketInfo(targetReq: any, request: Request) {
+  const ip = getClientIp(request);
+  if (!targetReq.socket) {
+    targetReq.socket = { remoteAddress: ip };
+  } else if (!targetReq.socket.remoteAddress) {
+    targetReq.socket.remoteAddress = ip;
+  }
+  if (!targetReq.connection) {
+    targetReq.connection = { remoteAddress: ip };
+  } else if (!targetReq.connection.remoteAddress) {
+    targetReq.connection.remoteAddress = ip;
+  }
+  if (!targetReq.ip) {
+    targetReq.ip = ip;
+  }
+}
+
 function createMockRes(extraHeaders: Headers) {
   const res: any = {
     statusCode: 200,
@@ -158,6 +183,7 @@ async function runMatchedRoutes(request: Request, url: URL): Promise<Response | 
         return headers[name.toLowerCase()];
       },
     };
+    attachSocketInfo(req, request);
 
     const res: any = {
       ...createMockRes(outHeaders),
@@ -281,6 +307,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/trpc")) {
+      attachSocketInfo(request, request);
       const extraHeaders = new Headers();
       const mockRes = createMockRes(extraHeaders);
       const trpcResponse = await fetchRequestHandler({
@@ -288,6 +315,7 @@ export default {
         req: request,
         router: appRouter,
         createContext: async ({ req: trpcReq }) => {
+          attachSocketInfo(trpcReq, request);
           return await createContext({
             req: trpcReq as any,
             res: mockRes as any,
@@ -320,4 +348,4 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
-      
+          
