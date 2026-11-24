@@ -1,3 +1,4 @@
+import process from "node:process";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { registerOAuthRoutes } from "./oauth";
 import { publicPlatformScript } from "./publicConfig";
@@ -280,10 +281,12 @@ async function runMatchedRoutes(request: Request, url: URL): Promise<Response | 
 }
 
 export default {
-  async fetch(request: Request, env: Record<string, unknown>): Promise<Response> {
-    for (const [key, value] of Object.entries(env)) {
-      if (typeof value === "string") {
-        process.env[key] = value;
+  async fetch(request: Request, env: Record<string, unknown> = {}): Promise<Response> {
+    if (env && typeof env === "object") {
+      for (const [key, value] of Object.entries(env)) {
+        if (typeof value === "string") {
+          process.env[key] = value;
+        }
       }
     }
 
@@ -348,4 +351,4 @@ export default {
     return new Response("Not Found", { status: 404 });
   },
 };
-          
+      
