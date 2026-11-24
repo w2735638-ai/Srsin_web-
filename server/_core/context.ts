@@ -24,7 +24,11 @@ export async function createContext(opts: CreateExpressContextOptions): Promise<
   }
 
   readerAccount = await getReaderFromRequest(opts.req);
-  opts.res.setHeader("Cache-Control", "private, no-store");
+
+  const resAny = opts?.res as any;
+  if (resAny && typeof resAny.setHeader === "function") {
+    resAny.setHeader("Cache-Control", "private, no-store");
+  }
 
   return {
     req: opts.req,
