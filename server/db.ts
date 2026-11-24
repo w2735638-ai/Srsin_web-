@@ -1,25 +1,33 @@
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/libsql";
+import { createClient } from "@libsql/client";
 import { InsertUser, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
-function getConnectionUrl(): string | undefined {
-  return (
-    process.env.DATABASE_URL ||
+function getTursoConfig() {
+  const url =
     process.env.TURSO_DATABASE_URL ||
+    process.env.DATABASE_URL ||
     process.env.TURSO_DA ||
-    undefined
-  );
+    undefined;
+  const authToken =
+    process.env.TURSO_AUTH_TOKEN ||
+    process.env.TURSO_AU ||
+    undefined;
+  return { url, authToken };
 }
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
-  const connectionUrl = getConnectionUrl();
-  if (!_db && connectionUrl) {
+  const { url, authToken } = getTursoConfig();
+  if (!_db && url) {
     try {
-      _db = drizzle(connectionUrl);
+      const client = createClient({
+        url,
+        authToken,
+      });
+      _db = drizzle(client);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -77,9 +85,13 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
-      set: updateSet,
-    });
+    await db
+      .insert(users)
+      .values(values)
+      .onConflictDoUpdate({
+        target: users.openId,
+        set: updateSet,
+      });
   } catch (error) {
     console.error("[Database] Failed to upsert user:", error);
     throw error;
@@ -97,5 +109,3 @@ export async function getUserByOpenId(openId: string) {
 
   return result.length > 0 ? result[0] : undefined;
 }
-
-// TODO: add feature queries here as your schema grows.
