@@ -1,136 +1,168 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
-  boolean,
   index,
-  int,
-  longtext,
-  mysqlEnum,
-  mysqlTable,
+  integer,
+  sqliteTable,
   text,
-  timestamp,
   uniqueIndex,
-  varchar,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/sqlite-core";
 
 export const NOVEL_GENRES = ["Fantasy", "Action", "Romance", "Sci-Fi"] as const;
 export type NovelGenre = (typeof NOVEL_GENRES)[number];
 
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  openId: text("openId").notNull().unique(),
   name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+  email: text("email"),
+  loginMethod: text("loginMethod"),
+  role: text("role", { enum: ["user", "admin"] }).default("user").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
+  lastSignedIn: integer("lastSignedIn", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
 });
 
-export const novels = mysqlTable("novels", {
-  id: int("id").autoincrement().primaryKey(),
-  slug: varchar("slug", { length: 180 }).notNull().unique(),
-  title: varchar("title", { length: 180 }).notNull(),
-  author: varchar("author", { length: 160 }).notNull(),
-  genre: mysqlEnum("genre", NOVEL_GENRES).notNull(),
+export const novels = sqliteTable("novels", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  author: text("author").notNull(),
+  genre: text("genre", { enum: NOVEL_GENRES }).notNull(),
   coverUrl: text("coverUrl"),
   synopsis: text("synopsis").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" })
+    .default(sql`(unixepoch())`)
+    .notNull(),
 });
 
-export const chapters = mysqlTable(
+export const chapters = sqliteTable(
   "chapters",
   {
-    id: int("id").autoincrement().primaryKey(),
-    novelId: int("novelId")
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    novelId: integer("novelId")
       .notNull()
       .references(() => novels.id, { onDelete: "cascade" }),
-    chapterNumber: int("chapterNumber").notNull(),
-    title: varchar("title", { length: 200 }).notNull(),
-    content: longtext("content").notNull(),
-    status: mysqlEnum("status", ["draft", "published"]).default("published").notNull(),
-    isPaid: boolean("isPaid").default(false).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    chapterNumber: integer("chapterNumber").notNull(),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    status: text("status", { enum: ["draft", "published"] })
+      .default("published")
+      .notNull(),
+    isPaid: integer("isPaid", { mode: "boolean" }).default(false).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   table => [
     uniqueIndex("chapters_novel_number_unique").on(table.novelId, table.chapterNumber),
-    index("chapters_novel_status_number_idx").on(table.novelId, table.status, table.chapterNumber),
-  ],
+    index("chapters_novel_status_number_idx").on(
+      table.novelId,
+      table.status,
+      table.chapterNumber
+    ),
+  ]
 );
 
-export const readerAccounts = mysqlTable(
+export const readerAccounts = sqliteTable(
   "reader_accounts",
   {
-    id: int("id").autoincrement().primaryKey(),
-    email: varchar("email", { length: 320 }).notNull(),
-    passwordHash: varchar("passwordHash", { length: 255 }).notNull(),
-    coins: int("coins").default(0).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-    lastLoginAt: timestamp("lastLoginAt"),
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull(),
+    passwordHash: text("passwordHash").notNull(),
+    coins: integer("coins").default(0).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+    updatedAt: integer("updatedAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+    lastLoginAt: integer("lastLoginAt", { mode: "timestamp" }),
   },
-  table => [uniqueIndex("reader_accounts_email_unique").on(table.email)],
+  table => [uniqueIndex("reader_accounts_email_unique").on(table.email)]
 );
 
-export const readerSessions = mysqlTable(
+export const readerSessions = sqliteTable(
   "reader_sessions",
   {
-    id: int("id").autoincrement().primaryKey(),
-    accountId: int("accountId")
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    accountId: integer("accountId")
       .notNull()
       .references(() => readerAccounts.id, { onDelete: "cascade" }),
-    tokenHash: varchar("tokenHash", { length: 64 }).notNull(),
-    expiresAt: timestamp("expiresAt").notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    tokenHash: text("tokenHash").notNull(),
+    expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   table => [
     uniqueIndex("reader_sessions_token_unique").on(table.tokenHash),
     index("reader_sessions_account_expiry_idx").on(table.accountId, table.expiresAt),
-  ],
+  ]
 );
 
-export const chapterUnlocks = mysqlTable(
+export const chapterUnlocks = sqliteTable(
   "chapter_unlocks",
   {
-    id: int("id").autoincrement().primaryKey(),
-    accountId: int("accountId")
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    accountId: integer("accountId")
       .notNull()
       .references(() => readerAccounts.id, { onDelete: "cascade" }),
-    chapterId: int("chapterId")
+    chapterId: integer("chapterId")
       .notNull()
       .references(() => chapters.id, { onDelete: "cascade" }),
-    coinsCharged: int("coinsCharged").default(15).notNull(),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    coinsCharged: integer("coinsCharged").default(15).notNull(),
+    createdAt: integer("createdAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   table => [
-    uniqueIndex("chapter_unlock_account_chapter_unique").on(table.accountId, table.chapterId),
+    uniqueIndex("chapter_unlock_account_chapter_unique").on(
+      table.accountId,
+      table.chapterId
+    ),
     index("chapter_unlock_chapter_idx").on(table.chapterId),
-  ],
+  ]
 );
 
-export const coinTransactions = mysqlTable(
+export const coinTransactions = sqliteTable(
   "coin_transactions",
   {
-    id: int("id").autoincrement().primaryKey(),
-    accountId: int("accountId")
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    accountId: integer("accountId")
       .notNull()
       .references(() => readerAccounts.id, { onDelete: "cascade" }),
-    chapterId: int("chapterId").references(() => chapters.id, { onDelete: "set null" }),
-    kind: mysqlEnum("kind", ["admin_topup", "chapter_unlock"]).notNull(),
-    amount: int("amount").notNull(),
-    balanceAfter: int("balanceAfter").notNull(),
-    note: varchar("note", { length: 255 }),
-    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    chapterId: integer("chapterId").references(() => chapters.id, {
+      onDelete: "set null",
+    }),
+    kind: text("kind", { enum: ["admin_topup", "chapter_unlock"] }).notNull(),
+    amount: integer("amount").notNull(),
+    balanceAfter: integer("balanceAfter").notNull(),
+    note: text("note"),
+    createdAt: integer("createdAt", { mode: "timestamp" })
+      .default(sql`(unixepoch())`)
+      .notNull(),
   },
   table => [
     index("coin_transactions_account_time_idx").on(table.accountId, table.createdAt),
     index("coin_transactions_chapter_idx").on(table.chapterId),
-  ],
+  ]
 );
 
-export const novelRelations = relations(novels, ({ many }) => ({ chapters: many(chapters) }));
+export const novelRelations = relations(novels, ({ many }) => ({
+  chapters: many(chapters),
+}));
 
 export const chapterRelations = relations(chapters, ({ one }) => ({
   novel: one(novels, { fields: [chapters.novelId], references: [novels.id] }),
