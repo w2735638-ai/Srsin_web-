@@ -1,15 +1,25 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
+function getConnectionUrl(): string | undefined {
+  return (
+    process.env.DATABASE_URL ||
+    process.env.TURSO_DATABASE_URL ||
+    process.env.TURSO_DA ||
+    undefined
+  );
+}
+
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  const connectionUrl = getConnectionUrl();
+  if (!_db && connectionUrl) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = drizzle(connectionUrl);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -55,8 +65,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
