@@ -1,5 +1,6 @@
-// Only these public values may reach the browser. Never serialize process.env.
-export function publicPlatformConfig(env: NodeJS.ProcessEnv = process.env) {
+export type PlatformEnvLike = Record<string, string | undefined>;
+
+export function publicPlatformConfig(env: PlatformEnvLike = process.env) {
   return {
     projectId: env.MANUS_PROJECT_ID ?? "",
     oauthPortalUrl: env.MANUS_OAUTH_PORTAL_URL ?? "",
@@ -8,7 +9,7 @@ export function publicPlatformConfig(env: NodeJS.ProcessEnv = process.env) {
   };
 }
 
-export function publicPlatformScript(env: NodeJS.ProcessEnv = process.env): string {
+export function publicPlatformScript(env: PlatformEnvLike = process.env): string {
   const json = JSON.stringify(publicPlatformConfig(env)).replaceAll("<", "\\u003c");
   return `window.__MANUS_CONFIG__=${json};`;
 }
