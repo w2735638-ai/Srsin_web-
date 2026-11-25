@@ -1,90 +1,107 @@
-import process from "node:process";
+import { createClient, type Client } from "@libsql/client/web";
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/libsql";
-import { createClient } from "@libsql/client/web";
+import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
 import * as schema from "../drizzle/schema";
-import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from "./_core/env";
+import { users, type InsertUser } from "../drizzle/schema";
+import { getEnv, type RuntimeEnvSource } from "./_core/env";
 
-let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
-let _lastClientUrl: string | undefined;
+export type AppDatabase = LibSQLDatabase<typeof schema>;
 
-function getTursoConfig() {
-  const rawUrl =
-    process.env.TURSO_DATABASE_URL ||
-    process.env.DATABASE_URL ||
-    process.env.TURSO_DA ||
-    "";
-  const url = rawUrl.trim() || undefined;
-  const authToken =
-    (
-      process.env.TURSO_AUTH_TOKEN ||
-      process.env.TURSO_AU ||
-      ""
-    ).trim() || undefined;
-  return { url, authToken };
-}
+let _client: Client | null = null;
+let _db: AppDatabase | null = null;
+let _cachedConfigKey = "";
 
-export async function getDb() {
-  const { url, authToken } = getTursoConfig();
+export async function getDb(runtimeEnv?: RuntimeEnvSource): Promise<AppDatabase | null> {
+  const env = getEnv(runtimeEnv);
+  const url = env.databaseUrl;
+  const authToken = env.databaseAuthToken;
+
   if (!url) {
-    throw new Error(
-      "Database is not available (missing TURSO_DATABASE_URL / DATABASE_URL in runtime env)"
-    );
+    console.warn("[Database] Missing TURSO_DATABASE_URL / DATABASE_URL");
+    return null;
   }
 
-  if (!_db || _lastClientUrl !== url) {
-    const client = createClient({
+  const configKey = `${url}::${authToken}`;
+  if (_db && _cachedConfigKey === configKey) {
+    return _db;
+  }
+
+  try {
+    _client = createClient({
       url,
-      authToken,
+      ...(authToken ? { authToken } : {}),
     });
-    _db = drizzle(client, { schema });
-    _lastClientUrl = url;
+    _db = drizzle(_client, { schema });
+    _cachedConfigKey = configKey;
+    return _db;
+  } catch (error) {
+    console.error("[Database] Failed to initialize libsql client:", error);
+    _client = null;
+    _db = null;
+    _cachedConfigKey = "";
+    return null;
   }
-
-  return _db;
 }
 
-export async function upsertUser(user: InsertUser): Promise<void> {
+export async function upsertUser(user: InsertUser, runtimeEnv?: RuntimeEnvSource): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");
   }
 
-  const db = await getDb();
-  const now = new Date();
-  const role =
-    user.role !== undefined
-      ? user.role
-      : user.openId === ENV.ownerOpenId
-        ? "admin"
-        : "user";
+  const db = await getDb(runtimeEnv);
+  if (!db) {
+    console.warn("[Database] Cannot upsert user: database not available");
+    return;
+  }
 
-  await db
-    .insert(users)
-    .values({
+  try {
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.openId, user.openId))
+      .limit(1);
+
+    const now = new Date();
+    const values: InsertUser = {
       openId: user.openId,
       name: user.name ?? null,
       email: user.email ?? null,
       loginMethod: user.loginMethod ?? null,
-      role,
+      role: user.role ?? (user.openId === getEnv(runtimeEnv).ownerOpenId ? "admin" : "user"),
       lastSignedIn: user.lastSignedIn ?? now,
-      updatedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: users.openId,
-      set: {
-        ...(user.name !== undefined ? { name: user.name } : {}),
-        ...(user.email !== undefined ? { email: user.email } : {}),
-        ...(user.loginMethod !== undefined ? { loginMethod: user.loginMethod } : {}),
-        ...(user.role !== undefined || user.openId === ENV.ownerOpenId ? { role } : {}),
-        lastSignedIn: user.lastSignedIn ?? now,
+    };
+
+    if (existing.length > 0) {
+      await db
+        .update(users)
+        .set({
+          name: values.name,
+          email: values.email,
+          loginMethod: values.loginMethod,
+          lastSignedIn: values.lastSignedIn,
+          updatedAt: now,
+        })
+        .where(eq(users.openId, user.openId));
+    } else {
+      await db.insert(users).values({
+        ...values,
+        createdAt: now,
         updatedAt: now,
-      },
-    });
+      });
+    }
+  } catch (error) {
+    console.error("[Database] Failed to upsert user:", error);
+    throw error;
+  }
 }
 
-export async function getUserByOpenId(openId: string) {
-  const db = await getDb();
+export async function getUserByOpenId(openId: string, runtimeEnv?: RuntimeEnvSource) {
+  const db = await getDb(runtimeEnv);
+  if (!db) {
+    console.warn("[Database] Cannot get user: database not available");
+    return undefined;
+  }
+
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
   return result.length > 0 ? result[0] : undefined;
 }
