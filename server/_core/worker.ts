@@ -1,354 +1,244 @@
-import process from "node:process";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { registerOAuthRoutes } from "./oauth";
-import { publicPlatformScript } from "./publicConfig";
-import { appRouter } from "../routers";
-import { createContext } from "./context";
+import { createApp } from "./_core/index";
 
-type HandlerFn = (req: any, res: any, next?: any) => unknown;
-interface RegisteredRoute {
-  method: string;
-  path: string;
-  handlers: HandlerFn[];
-}
-
-function createMiniExpressApp() {
-  const routes: RegisteredRoute[] = [];
-
-  const addRoute = (method: string, path: string, ...handlers: HandlerFn[]) => {
-    routes.push({ method: method.toUpperCase(), path, handlers });
+export interface Env {
+  ASSETS?: {
+    fetch: (request: Request) => Promise<Response>;
   };
-
-  return {
-    routes,
-    use(pathOrHandler: string | HandlerFn, ...handlers: HandlerFn[]) {
-      if (typeof pathOrHandler === "function") {
-        routes.push({ method: "ALL", path: "*", handlers: [pathOrHandler, ...handlers] });
-      } else {
-        routes.push({ method: "ALL", path: pathOrHandler, handlers });
-      }
-      return this;
-    },
-    get(path: string, ...handlers: HandlerFn[]) {
-      addRoute("GET", path, ...handlers);
-      return this;
-    },
-    post(path: string, ...handlers: HandlerFn[]) {
-      addRoute("POST", path, ...handlers);
-      return this;
-    },
-    put(path: string, ...handlers: HandlerFn[]) {
-      addRoute("PUT", path, ...handlers);
-      return this;
-    },
-    delete(path: string, ...handlers: HandlerFn[]) {
-      addRoute("DELETE", path, ...handlers);
-      return this;
-    },
-  };
+  TURSO_DATABASE_URL?: string;
+  TURSO_AUTH_TOKEN?: string;
+  DATABASE_URL?: string;
+  ADMIN_PASSWORD?: string;
+  JWT_SECRET?: string;
+  MANUS_PROJECT_ID?: string;
+  MANUS_OAUTH_PORTAL_URL?: string;
+  MANUS_API_URL?: string;
+  MANUS_API_BROWSER_KEY?: string;
+  [key: string]: unknown;
 }
 
-const miniApp = createMiniExpressApp();
-registerOAuthRoutes(miniApp as any);
+const app = createApp();
 
-function getClientIp(request: Request): string {
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "127.0.0.1"
-  );
-}
-
-function attachSocketInfo(targetReq: any, request: Request) {
-  const ip = getClientIp(request);
-  if (!targetReq.socket) {
-    targetReq.socket = { remoteAddress: ip };
-  } else if (!targetReq.socket.remoteAddress) {
-    targetReq.socket.remoteAddress = ip;
+function syncRuntimeEnvToProcess(env: Env) {
+  if (typeof process === "undefined") return;
+  if (!process.env) {
+    (process as unknown as { env: Record<string, string> }).env = {};
   }
-  if (!targetReq.connection) {
-    targetReq.connection = { remoteAddress: ip };
-  } else if (!targetReq.connection.remoteAddress) {
-    targetReq.connection.remoteAddress = ip;
-  }
-  if (!targetReq.ip) {
-    targetReq.ip = ip;
-  }
-}
-
-function createMockRes(extraHeaders: Headers) {
-  const res: any = {
-    statusCode: 200,
-    status(code: number) {
-      res.statusCode = code;
-      return res;
-    },
-    setHeader(name: string, val: string | string[]) {
-      if (Array.isArray(val)) {
-        extraHeaders.delete(name);
-        for (const item of val) extraHeaders.append(name, item);
-      } else {
-        extraHeaders.set(name, String(val));
-      }
-      return res;
-    },
-    getHeader(name: string) {
-      return extraHeaders.get(name) ?? undefined;
-    },
-    removeHeader(name: string) {
-      extraHeaders.delete(name);
-      return res;
-    },
-    set(field: string | Record<string, string>, val?: string) {
-      if (typeof field === "string" && val !== undefined) {
-        res.setHeader(field, val);
-      } else if (typeof field === "object") {
-        for (const [k, v] of Object.entries(field)) res.setHeader(k, v);
-      }
-      return res;
-    },
-    cookie(name: string, value: string, options?: Record<string, any>) {
-      const parts = [`${name}=${encodeURIComponent(value)}`];
-      if (options?.maxAge) parts.push(`Max-Age=${Math.floor(options.maxAge / 1000)}`);
-      if (options?.httpOnly) parts.push("HttpOnly");
-      if (options?.sameSite) parts.push(`SameSite=${options.sameSite}`);
-      if (options?.path) parts.push(`Path=${options.path}`);
-      if (options?.secure) parts.push("Secure");
-      extraHeaders.append("set-cookie", parts.join("; "));
-      return res;
-    },
-    clearCookie(name: string, options?: Record<string, any>) {
-      const path = options?.path || "/";
-      extraHeaders.append("set-cookie", `${name}=; Max-Age=0; Path=${path}`);
-      return res;
-    },
-  };
-  return res;
-}
-
-async function runMatchedRoutes(request: Request, url: URL): Promise<Response | null> {
-  const method = request.method.toUpperCase();
-  const matched = miniApp.routes.filter((r) => {
-    const methodOk = r.method === "ALL" || r.method === method;
-    if (!methodOk) return false;
-    if (r.path === "*") return true;
-    return url.pathname === r.path || url.pathname.startsWith(r.path.endsWith("/") ? r.path : r.path + "/");
-  });
-
-  if (matched.length === 0) return null;
-
-  const headers: Record<string, string> = {};
-  request.headers.forEach((v, k) => {
-    headers[k.toLowerCase()] = v;
-  });
-
-  let parsedBody: unknown = undefined;
-  if (method !== "GET" && method !== "HEAD") {
-    const rawText = await request.text();
-    if (rawText) {
-      if ((headers["content-type"] || "").includes("application/json")) {
-        try {
-          parsedBody = JSON.parse(rawText);
-        } catch {
-          parsedBody = {};
-        }
-      } else {
-        parsedBody = rawText;
-      }
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") {
+      process.env[key] = value;
     }
   }
+}
 
-  const query: Record<string, string> = {};
-  url.searchParams.forEach((v, k) => {
-    query[k] = v;
+async function handleApiRequest(request: Request, env: Env): Promise<Response> {
+  syncRuntimeEnvToProcess(env);
+
+  const url = new URL(request.url);
+  const bodyBuffer =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer();
+
+  const rawHeaders: Record<string, string> = {};
+  request.headers.forEach((value, key) => {
+    rawHeaders[key.toLowerCase()] = value;
   });
 
-  return await new Promise<Response | null>((resolve, reject) => {
-    let statusCode = 200;
-    const outHeaders = new Headers();
-    const chunks: Uint8Array[] = [];
-    let finished = false;
+  const query: Record<string, string> = {};
+  url.searchParams.forEach((value, key) => {
+    query[key] = value;
+  });
 
-    const req: any = {
-      method,
+  return new Promise<Response>((resolve) => {
+    let statusCode = 200;
+    const responseHeaders = new Headers();
+    const chunks: Uint8Array[] = [];
+    let ended = false;
+
+    const finish = (chunk?: unknown) => {
+      if (ended) return;
+      ended = true;
+      if (chunk !== undefined && chunk !== null) {
+        if (chunk instanceof Uint8Array) {
+          chunks.push(chunk);
+        } else if (typeof chunk === "string") {
+          chunks.push(new TextEncoder().encode(chunk));
+        } else {
+          chunks.push(new TextEncoder().encode(JSON.stringify(chunk)));
+        }
+      }
+      const totalLen = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+      const merged = new Uint8Array(totalLen);
+      let offset = 0;
+      for (const c of chunks) {
+        merged.set(c, offset);
+        offset += c.byteLength;
+      }
+      resolve(
+        new Response(merged.byteLength > 0 ? merged : null, {
+          status: statusCode,
+          headers: responseHeaders,
+        }),
+      );
+    };
+
+    let parsedBody: unknown = undefined;
+    if (bodyBuffer && bodyBuffer.byteLength > 0) {
+      const text = new TextDecoder().decode(bodyBuffer);
+      const contentType = rawHeaders["content-type"] ?? "";
+      if (contentType.includes("application/json")) {
+        try {
+          parsedBody = JSON.parse(text);
+        } catch {
+          parsedBody = text;
+        }
+      } else {
+        parsedBody = text;
+      }
+    }
+
+    const req: Record<string, unknown> = {
+      method: request.method,
       url: url.pathname + url.search,
       originalUrl: url.pathname + url.search,
       path: url.pathname,
-      headers,
+      headers: rawHeaders,
       query,
       body: parsedBody,
+      protocol: url.protocol.replace(":", ""),
+      ip: rawHeaders["cf-connecting-ip"] ?? "127.0.0.1",
+      socket: { remoteAddress: rawHeaders["cf-connecting-ip"] ?? "127.0.0.1" },
+      env,
       get(name: string) {
-        return headers[name.toLowerCase()];
+        return rawHeaders[name.toLowerCase()];
       },
       header(name: string) {
-        return headers[name.toLowerCase()];
+        return rawHeaders[name.toLowerCase()];
       },
     };
-    attachSocketInfo(req, request);
 
-    const res: any = {
-      ...createMockRes(outHeaders),
+    const res: Record<string, unknown> = {
+      statusCode: 200,
+      locals: {},
+      headersSent: false,
       status(code: number) {
         statusCode = code;
         this.statusCode = code;
         return this;
       },
-      type(t: string) {
-        this.setHeader("content-type", t);
+      setHeader(name: string, value: string | string[]) {
+        if (Array.isArray(value)) {
+          responseHeaders.delete(name);
+          for (const v of value) responseHeaders.append(name, v);
+        } else {
+          responseHeaders.set(name, String(value));
+        }
+        return this;
+      },
+      set(name: string, value: string | string[]) {
+        return this.setHeader(name, value);
+      },
+      header(name: string, value: string | string[]) {
+        return this.setHeader(name, value);
+      },
+      getHeader(name: string) {
+        return responseHeaders.get(name) ?? undefined;
+      },
+      removeHeader(name: string) {
+        responseHeaders.delete(name);
+      },
+      type(contentType: string) {
+        responseHeaders.set("Content-Type", contentType);
+        return this;
+      },
+      cookie(name: string, value: string, options: Record<string, unknown> = {}) {
+        const parts = [`${name}=${value}`];
+        if (options.maxAge !== undefined) {
+          parts.push(`Max-Age=${Math.floor(Number(options.maxAge) / 1000)}`);
+        }
+        parts.push(`Path=${options.path ?? "/"}`);
+        if (options.httpOnly) parts.push("HttpOnly");
+        if (options.secure) parts.push("Secure");
+        if (options.sameSite) {
+          const s = String(options.sameSite);
+          parts.push(`SameSite=${s.charAt(0).toUpperCase() + s.slice(1)}`);
+        }
+        responseHeaders.append("Set-Cookie", parts.join("; "));
+        return this;
+      },
+      clearCookie(name: string, options: Record<string, unknown> = {}) {
+        return this.cookie(name, "", { ...options, maxAge: 0 });
+      },
+      json(data: unknown) {
+        if (!responseHeaders.has("Content-Type")) {
+          responseHeaders.set("Content-Type", "application/json; charset=utf-8");
+        }
+        this.headersSent = true;
+        finish(JSON.stringify(data));
+        return this;
+      },
+      send(data?: unknown) {
+        this.headersSent = true;
+        if (typeof data === "object" && data !== null && !(data instanceof Uint8Array)) {
+          if (!responseHeaders.has("Content-Type")) {
+            responseHeaders.set("Content-Type", "application/json; charset=utf-8");
+          }
+          finish(JSON.stringify(data));
+        } else {
+          finish(data);
+        }
         return this;
       },
       redirect(statusOrUrl: number | string, maybeUrl?: string) {
         const code = typeof statusOrUrl === "number" ? statusOrUrl : 302;
-        const target = typeof statusOrUrl === "string" ? statusOrUrl : maybeUrl || "/";
+        const target = typeof statusOrUrl === "string" ? statusOrUrl : maybeUrl ?? "/";
         statusCode = code;
-        outHeaders.set("location", target);
-        this.end();
-        return this;
-      },
-      json(obj: unknown) {
-        if (!outHeaders.has("content-type")) {
-          outHeaders.set("content-type", "application/json; charset=utf-8");
-        }
-        chunks.push(new TextEncoder().encode(JSON.stringify(obj)));
-        this.end();
-        return this;
-      },
-      send(body?: unknown) {
-        if (body !== undefined && body !== null) {
-          if (typeof body === "string") {
-            chunks.push(new TextEncoder().encode(body));
-          } else if (body instanceof Uint8Array) {
-            chunks.push(body);
-          } else {
-            if (!outHeaders.has("content-type")) {
-              outHeaders.set("content-type", "application/json; charset=utf-8");
-            }
-            chunks.push(new TextEncoder().encode(JSON.stringify(body)));
-          }
-        }
-        this.end();
-        return this;
+        responseHeaders.set("Location", target);
+        this.headersSent = true;
+        finish();
       },
       end(chunk?: unknown) {
-        if (finished) return this;
-        finished = true;
-        if (chunk !== undefined && chunk !== null) {
-          chunks.push(
-            chunk instanceof Uint8Array ? chunk : new TextEncoder().encode(String(chunk))
-          );
-        }
-        const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
-        const merged = new Uint8Array(totalLen);
-        let offset = 0;
-        for (const c of chunks) {
-          merged.set(c, offset);
-          offset += c.length;
-        }
-        resolve(new Response(merged, { status: statusCode, headers: outHeaders }));
-        return this;
+        this.headersSent = true;
+        finish(chunk);
       },
     };
 
-    const handlerQueue: HandlerFn[] = [];
-    for (const r of matched) {
-      handlerQueue.push(...r.handlers);
-    }
-
-    let idx = 0;
-    const next = (err?: unknown) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      if (finished) return;
-      const fn = handlerQueue[idx++];
-      if (!fn) {
-        resolve(null);
-        return;
-      }
-      try {
-        const maybePromise = fn(req, res, next);
-        if (maybePromise && typeof (maybePromise as Promise<unknown>).catch === "function") {
-          (maybePromise as Promise<unknown>).catch(reject);
+    (app as unknown as (req: unknown, res: unknown, next: (err?: unknown) => void) => void)(
+      req,
+      res,
+      (err?: unknown) => {
+        if (err) {
+          console.error("[Worker Express Error]", err);
+          statusCode = 500;
+          responseHeaders.set("Content-Type", "application/json");
+          finish(JSON.stringify({ error: "Internal Server Error" }));
+        } else if (!ended) {
+          statusCode = 404;
+          finish(JSON.stringify({ error: "Not Found" }));
         }
-      } catch (e) {
-        reject(e);
-      }
-    };
-
-    next();
+      },
+    );
   });
 }
 
 export default {
-  async fetch(request: Request, env: Record<string, unknown> = {}): Promise<Response> {
-    if (env && typeof env === "object") {
-      for (const [key, value] of Object.entries(env)) {
-        if (typeof value === "string") {
-          process.env[key] = value;
-        }
-      }
-    }
-
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/health") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        status: 200,
-        headers: { "content-type": "application/json; charset=utf-8" },
-      });
+    if (url.pathname.startsWith("/api/")) {
+      return handleApiRequest(request, env);
     }
 
-    if (url.pathname === "/api/platform/config.js") {
-      return new Response(publicPlatformScript(), {
-        status: 200,
-        headers: {
-          "content-type": "application/javascript; charset=utf-8",
-          "cache-control": "no-store",
-        },
-      });
-    }
-
-    if (url.pathname.startsWith("/api/trpc")) {
-      attachSocketInfo(request, request);
-      const extraHeaders = new Headers();
-      const mockRes = createMockRes(extraHeaders);
-      const trpcResponse = await fetchRequestHandler({
-        endpoint: "/api/trpc",
-        req: request,
-        router: appRouter,
-        createContext: async ({ req: trpcReq }) => {
-          attachSocketInfo(trpcReq, request);
-          return await createContext({
-            req: trpcReq as any,
-            res: mockRes as any,
-            info: {} as any,
-          } as any);
-        },
-      });
-
-      const combinedHeaders = new Headers(trpcResponse.headers);
-      extraHeaders.forEach((value, key) => {
-        if (key.toLowerCase() === "set-cookie") {
-          combinedHeaders.append(key, value);
-        } else {
-          combinedHeaders.set(key, value);
-        }
-      });
-
-      return new Response(trpcResponse.body, {
-        status: trpcResponse.status,
-        statusText: trpcResponse.statusText,
-        headers: combinedHeaders,
-      });
-    }
-
-    const matchedResponse = await runMatchedRoutes(request, url);
-    if (matchedResponse) {
-      return matchedResponse;
+    if (env.ASSETS) {
+      const assetRes = await env.ASSETS.fetch(request);
+      if (assetRes.status !== 404) {
+        return assetRes;
+      }
+      const indexUrl = new URL("/index.html", url.origin);
+      return env.ASSETS.fetch(new Request(indexUrl.toString(), request));
     }
 
     return new Response("Not Found", { status: 404 });
   },
 };
-      
+                   
