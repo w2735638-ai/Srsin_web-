@@ -4,8 +4,9 @@ import type { Request, Response } from "express";
 export const ADMIN_COOKIE = "ink_admin_session";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
-function adminPassword() {
-  return process.env.ADMIN_PASSWORD ?? "";
+function resolveAdminPassword(req?: Request): string {
+  const reqEnv = req ? (req as { env?: Record<string, string | undefined> }).env : undefined;
+  return reqEnv?.ADMIN_PASSWORD ?? process.env.ADMIN_PASSWORD ?? "";
 }
 
 function sessionSignature(expiry: string, password: string) {
@@ -23,7 +24,7 @@ function readCookie(req: Request, name: string) {
 }
 
 export function hasAdminSession(req: Request) {
-  const password = adminPassword();
+  const password = resolveAdminPassword(req);
   if (password.length < 12) return false;
   const token = readCookie(req, ADMIN_COOKIE);
   const [expiry, signature, extra] = token.split(".");
@@ -36,16 +37,16 @@ export function hasAdminSession(req: Request) {
   return timingSafeEqual(actualDigest, expectedDigest);
 }
 
-export function verifyAdminPassword(candidate: string) {
-  const configured = adminPassword();
+export function verifyAdminPassword(candidate: string, req?: Request) {
+  const configured = resolveAdminPassword(req);
   if (configured.length < 12) return false;
   const expectedDigest = createHash("sha256").update(configured).digest();
   const candidateDigest = createHash("sha256").update(candidate).digest();
   return timingSafeEqual(expectedDigest, candidateDigest);
 }
 
-export function startAdminSession(res: Response) {
-  const password = adminPassword();
+export function startAdminSession(res: Response, req?: Request) {
+  const password = resolveAdminPassword(req);
   const expiry = String(Date.now() + SESSION_TTL_MS);
   const signature = sessionSignature(expiry, password);
   res.cookie(ADMIN_COOKIE, `${expiry}.${signature}`, {
