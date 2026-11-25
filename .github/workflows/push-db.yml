@@ -19,7 +19,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Install libsql client for Drizzle Kit
-        run: npm install --no-save @libsql/client
+        run: npm install --no-save --legacy-peer-deps @libsql/client
 
       - name: Push schema to Turso
         env:
