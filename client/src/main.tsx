@@ -32,26 +32,32 @@ queryClient.getMutationCache().subscribe(event => {
 });
 
 const trpcClient = trpc.createClient({
-  links: [httpBatchLink({
-    url: "/api/trpc",
-    transformer: superjson,
-    headers() {
-      try {
-        const raw = sessionStorage.getItem("manus-cookie");
-        if (raw) {
-          const prefix = `${COOKIE_NAME}=`;
-          const token = raw.split(";").find(value => value.trim().startsWith(prefix))?.trim().slice(prefix.length);
-          if (token) return { Authorization: `Bearer ${token}` };
+  links: [
+    httpBatchLink({
+      url: "/api/trpc",
+      transformer: superjson,
+      headers() {
+        try {
+          const raw = sessionStorage.getItem("manus-cookie");
+          if (raw) {
+            const prefix = `${COOKIE_NAME}=`;
+            const token = raw
+              .split(";")
+              .find(value => value.trim().startsWith(prefix))
+              ?.trim()
+              .slice(prefix.length);
+            if (token) return { Authorization: `Bearer ${token}` };
+          }
+        } catch {
+          // Session storage is optional in embedded and private browsing contexts.
         }
-      } catch {
-        // Session storage is optional in embedded and private browsing contexts.
-      }
-      return {};
-    },
-    fetch(input, init) {
-      return globalThis.fetch(input, { ...(init ?? {}), credentials: "include" });
-    },
-  })],
+        return {};
+      },
+      fetch(input, init) {
+        return globalThis.fetch(input, { ...(init ?? {}), credentials: "include" });
+      },
+    }),
+  ],
 });
 
 createRoot(document.getElementById("root")!).render(
@@ -62,7 +68,7 @@ createRoot(document.getElementById("root")!).render(
   </trpc.Provider>,
 );
 
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
     void navigator.serviceWorker.register("/sw.js").catch(error => {
       console.warn("The offline shell could not be registered.", error);
