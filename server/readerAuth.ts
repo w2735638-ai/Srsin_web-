@@ -1,30 +1,47 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { and, eq, gt } from "drizzle-orm";
-import { readerAccounts, readerSessions, type ReaderSessionUser } from "../drizzle/schema";
+import {
+  readerAccounts,
+  readerSessions,
+  type ReaderSessionUser,
+} from "../drizzle/schema";
+import type { RuntimeEnvSource } from "./_core/env";
 import { getDb } from "./db";
 
 export const READER_COOKIE = "ink_reader_session";
 const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-const SCRYPT_N = 32768;
+const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const KEY_LENGTH = 64;
-const MAX_MEMORY = 64 * 1024 * 1024;
+const MAX_MEMORY = 32 * 1024 * 1024;
 let dummyHashPromise: Promise<string> | undefined;
 
-function deriveKey(password: string, salt: Buffer) {
+function deriveKey(
+  password: string,
+  salt: Buffer,
+  n: number = SCRYPT_N,
+  r: number = SCRYPT_R,
+  p: number = SCRYPT_P,
+) {
   return new Promise<Buffer>((resolve, reject) => {
-    scrypt(password, salt, KEY_LENGTH, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: MAX_MEMORY }, (error, key) => {
-      if (error) reject(error);
-      else resolve(key as Buffer);
-    });
+    scrypt(
+      password,
+      salt,
+      KEY_LENGTH,
+      { N: n, r, p, maxmem: MAX_MEMORY },
+      (error, key) => {
+        if (error) reject(error);
+        else resolve(key as Buffer);
+      },
+    );
   });
 }
 
 export async function hashReaderPassword(password: string) {
   const salt = randomBytes(16);
-  const key = await deriveKey(password, salt);
+  const key = await deriveKey(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P);
   return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
 }
 
@@ -33,11 +50,21 @@ async function getDummyHash() {
   return dummyHashPromise;
 }
 
-export async function verifyReaderPassword(password: string, encodedHash?: string | null) {
+export async function verifyReaderPassword(
+  password: string,
+  encodedHash?: string | null,
+) {
   const accountExists = Boolean(encodedHash);
-  const encoded = encodedHash ?? await getDummyHash();
+  const encoded = encodedHash ?? (await getDummyHash());
   const parts = encoded.split("$");
-  if (parts.length !== 6 || parts[0] !== "scrypt" || parts[1] !== String(SCRYPT_N) || parts[2] !== String(SCRYPT_R) || parts[3] !== String(SCRYPT_P)) {
+  if (parts.length !== 6 || parts[0] !== "scrypt") {
+    return false;
+  }
+
+  const n = Number(parts[1]);
+  const r = Number(parts[2]);
+  const p = Number(parts[3]);
+  if (!Number.isInteger(n) || !Number.isInteger(r) || !Number.isInteger(p) || n <= 0 || r <= 0 || p <= 0) {
     return false;
   }
 
@@ -45,28 +72,42 @@ export async function verifyReaderPassword(password: string, encodedHash?: strin
     const salt = Buffer.from(parts[4], "base64url");
     const expected = Buffer.from(parts[5], "base64url");
     if (salt.length !== 16 || expected.length !== KEY_LENGTH) return false;
-    const actual = await deriveKey(password, salt);
+    const actual = await deriveKey(password, salt, n, r, p);
     return timingSafeEqual(actual, expected) && accountExists;
   } catch {
     return false;
   }
 }
 
-export async function findReaderCredentials(email: string) {
-  const db = await getDb();
+export async function findReaderCredentials(
+  email: string,
+  runtimeEnv?: RuntimeEnvSource,
+) {
+  const db = await getDb(runtimeEnv);
   if (!db) throw new Error("Database is not available");
   const [account] = await db
-    .select({ id: readerAccounts.id, email: readerAccounts.email, passwordHash: readerAccounts.passwordHash, coins: readerAccounts.coins })
+    .select({
+      id: readerAccounts.id,
+      email: readerAccounts.email,
+      passwordHash: readerAccounts.passwordHash,
+      coins: readerAccounts.coins,
+    })
     .from(readerAccounts)
     .where(eq(readerAccounts.email, email.trim()))
     .limit(1);
   return account ?? null;
 }
 
-export async function markReaderLogin(accountId: number) {
-  const db = await getDb();
+export async function markReaderLogin(
+  accountId: number,
+  runtimeEnv?: RuntimeEnvSource,
+) {
+  const db = await getDb(runtimeEnv);
   if (!db) throw new Error("Database is not available");
-  await db.update(readerAccounts).set({ lastLoginAt: new Date() }).where(eq(readerAccounts.id, accountId));
+  await db
+    .update(readerAccounts)
+    .set({ lastLoginAt: new Date() })
+    .where(eq(readerAccounts.id, accountId));
 }
 
 function readCookie(req: Request) {
@@ -83,12 +124,20 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export async function startReaderSession(accountId: number, res: Response) {
-  const db = await getDb();
+export async function startReaderSession(
+  accountId: number,
+  res: Response,
+  runtimeEnv?: RuntimeEnvSource,
+) {
+  const db = await getDb(runtimeEnv);
   if (!db) throw new Error("Database is not available");
   const token = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await db.insert(readerSessions).values({ accountId, tokenHash: hashToken(token), expiresAt });
+  await db.insert(readerSessions).values({
+    accountId,
+    tokenHash: hashToken(token),
+    expiresAt,
+  });
   res.cookie(READER_COOKIE, token, {
     httpOnly: true,
     secure: true,
@@ -98,25 +147,50 @@ export async function startReaderSession(accountId: number, res: Response) {
   });
 }
 
-export async function getReaderFromRequest(req: Request): Promise<ReaderSessionUser | null> {
+export async function getReaderFromRequest(
+  req: Request,
+  runtimeEnv?: RuntimeEnvSource,
+): Promise<ReaderSessionUser | null> {
   const token = readCookie(req);
   if (!token) return null;
-  const db = await getDb();
+  const db = await getDb(runtimeEnv);
   if (!db) return null;
   const [account] = await db
-    .select({ id: readerAccounts.id, email: readerAccounts.email, coins: readerAccounts.coins })
+    .select({
+      id: readerAccounts.id,
+      email: readerAccounts.email,
+      coins: readerAccounts.coins,
+    })
     .from(readerSessions)
     .innerJoin(readerAccounts, eq(readerSessions.accountId, readerAccounts.id))
-    .where(and(eq(readerSessions.tokenHash, hashToken(token)), gt(readerSessions.expiresAt, new Date())))
+    .where(
+      and(
+        eq(readerSessions.tokenHash, hashToken(token)),
+        gt(readerSessions.expiresAt, new Date()),
+      ),
+    )
     .limit(1);
   return account ?? null;
 }
 
-export async function endReaderSession(req: Request, res: Response) {
+export async function endReaderSession(
+  req: Request,
+  res: Response,
+  runtimeEnv?: RuntimeEnvSource,
+) {
   const token = readCookie(req);
   if (token) {
-    const db = await getDb();
-    if (db) await db.delete(readerSessions).where(eq(readerSessions.tokenHash, hashToken(token)));
+    const db = await getDb(runtimeEnv);
+    if (db) {
+      await db
+        .delete(readerSessions)
+        .where(eq(readerSessions.tokenHash, hashToken(token)));
+    }
   }
-  res.clearCookie(READER_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+  res.clearCookie(READER_COOKIE, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    path: "/",
+  });
 }
